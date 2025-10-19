@@ -11,12 +11,17 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+    - name: Checkout (for cache cleanup)
+      uses: actions/checkout@v3
+
     - name: Restore status cache
       id: cache
       uses: actions/cache/restore@v3
       with:
         path: .health/status.log
-        key: bot-health-status
+        key: bot-health-status-${{ github.run_id }}
+        restore-keys: |
+          bot-health-status-
 
     - name: Check bot status
       id: check
