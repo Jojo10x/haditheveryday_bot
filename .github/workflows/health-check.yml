@@ -45,7 +45,7 @@ jobs:
         
         # Bot is offline, check how long
         current_time=$(date '+%s')
-        forty_eight_hours=172800  # 48 hours in seconds
+        forty_eight_hours=10  # 48 hours in seconds
         
         # Check if all recent checks (last 48 hours) were offline
         offline_since=0
