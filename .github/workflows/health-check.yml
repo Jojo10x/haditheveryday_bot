@@ -17,14 +17,16 @@ jobs:
     - name: Check bot status
       id: check
       run: |
-        response=$(curl -s -o /dev/null -w "%{http_code}" https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/getMe)
+        # Check if the health endpoint on your Render service is responding
+        # This checks if your actual service is running, not just if the token is valid
+        response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 https://haditheveryday-bot.onrender.com)
         
         if [ $response -eq 200 ]; then
           echo "status=online" >> $GITHUB_OUTPUT
-          echo "✅ Bot is responding"
+          echo "✅ Bot service is responding on Render"
         else
           echo "status=offline" >> $GITHUB_OUTPUT
-          echo "❌ Bot is not responding (HTTP $response)"
+          echo "❌ Bot service is not responding (HTTP $response)"
         fi
 
     - name: Save status to file
@@ -45,7 +47,7 @@ jobs:
         
         # Bot is offline, check how long
         current_time=$(date '+%s')
-        forty_eight_hours=10  # 48 hours in seconds
+        forty_eight_hours=172800  # 48 hours in seconds
         
         # Check if all recent checks (last 48 hours) were offline
         offline_since=0
