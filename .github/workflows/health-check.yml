@@ -1,0 +1,108 @@
+name: Bot Health Check (48hr Alert)
+
+on:
+  schedule:
+    # Runs every 8 hours (3 times a day)
+    - cron: '0 */8 * * *'
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v3
+
+    - name: Check bot status
+      id: check
+      run: |
+        response=$(curl -s -o /dev/null -w "%{http_code}" https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/getMe)
+        
+        if [ $response -eq 200 ]; then
+          echo "status=online" >> $GITHUB_OUTPUT
+          echo "✅ Bot is responding"
+        else
+          echo "status=offline" >> $GITHUB_OUTPUT
+          echo "❌ Bot is not responding (HTTP $response)"
+        fi
+
+    - name: Save status to file
+      run: |
+        mkdir -p .health
+        echo "$(date '+%s')|${{ steps.check.outputs.status }}" >> .health/status.log
+        tail -n 100 .health/status.log > .health/status.tmp
+        mv .health/status.tmp .health/status.log
+
+    - name: Check 48-hour downtime
+      id: downtime
+      run: |
+        if [ "${{ steps.check.outputs.status }}" == "online" ]; then
+          echo "alert=false" >> $GITHUB_OUTPUT
+          echo "Bot is healthy, no alert needed"
+          exit 0
+        fi
+        
+        # Bot is offline, check how long
+        current_time=$(date '+%s')
+        forty_eight_hours=172800  # 48 hours in seconds
+        
+        # Check if all recent checks (last 48 hours) were offline
+        offline_since=0
+        if [ -f .health/status.log ]; then
+          first_offline=$(grep "offline" .health/status.log | head -n 1 | cut -d'|' -f1)
+          if [ ! -z "$first_offline" ]; then
+            offline_duration=$((current_time - first_offline))
+            echo "Bot has been offline for $offline_duration seconds"
+            
+            if [ $offline_duration -ge $forty_eight_hours ]; then
+              echo "alert=true" >> $GITHUB_OUTPUT
+              echo "⚠️ Bot has been down for 48+ hours!"
+            else
+              echo "alert=false" >> $GITHUB_OUTPUT
+              hours_remaining=$(( (forty_eight_hours - offline_duration) / 3600 ))
+              echo "Bot offline but less than 48hrs (${hours_remaining}h remaining)"
+            fi
+          fi
+        else
+          echo "alert=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Send Telegram Alert
+      if: steps.downtime.outputs.alert == 'true'
+      run: |
+        curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+          -d chat_id="${{ secrets.ADMIN_CHAT_ID }}" \
+          -d parse_mode="Markdown" \
+          -d text="🚨 *CRITICAL ALERT*%0A%0A⚠️ Hadith Bot has been DOWN for 48+ hours!%0A%0A🕐 Time: $(date '+%Y-%m-%d %H:%M:%S UTC')%0A%0A👉 Action Required: Check Render deployment immediately!"
+
+    - name: Create GitHub Issue
+      if: steps.downtime.outputs.alert == 'true'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const issues = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            labels: 'critical,bot-down'
+          });
+          
+          if (issues.data.length === 0) {
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🚨 CRITICAL: Bot Down for 48+ Hours',
+              body: `⚠️ **The Hadith Bot has been unresponsive for over 48 hours!**\n\n**Detection Time:** ${new Date().toISOString()}\n\n## Immediate Actions Required:\n\n1. Check Render deployment status\n2. Review application logs\n3. Verify database connectivity\n4. Test Telegram API token\n5. Check Hadith API status\n\n**Status:** Bot not responding to Telegram getMe requests`,
+              labels: ['critical', 'bot-down', 'urgent']
+            });
+          }
+
+    - name: Commit status log
+      if: always()
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add .health/status.log || true
+        git diff --quiet && git diff --staged --quiet || git commit -m "Update health check log [skip ci]"
+        git push || true
