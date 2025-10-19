@@ -22,6 +22,9 @@ from telegram.ext import (
     MessageHandler,
     filters
 )
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
 load_dotenv()
 
 logging.basicConfig(
@@ -33,6 +36,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 HADITH_API_KEY = os.getenv('HADITH_API_KEY')
 HADITH_API_BASE = "https://hadithapi.com/api"
+PORT = int(os.getenv('PORT', 8000))
 
 WAITING_FOR_TIME = 1
 
@@ -44,6 +48,21 @@ BOOKS = [
     "ibn-e-majah",
     "sunan-nasai"
 ]
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'Bot is running')
+    
+    def log_message(self, format, *args):
+        pass  
+
+def run_health_server():
+    server = HTTPServer(('0.0.0.0', PORT), HealthCheckHandler)
+    logger.info(f"Health check server running on port {PORT}")
+    server.serve_forever()
 
 def fetch_random_hadith():
     """Fetch a random hadith from the API"""
@@ -488,7 +507,6 @@ async def post_init(application: Application):
                 if isinstance(time_obj, str):
                     hour, minute = map(int, time_obj.split(':'))
                 elif hasattr(time_obj, 'hour') and hasattr(time_obj, 'minute'):
-
                     hour = time_obj.hour
                     minute = time_obj.minute
                 else:
@@ -515,6 +533,9 @@ async def post_init(application: Application):
 def main():
     """Start the bot"""
     init_database()
+
+    health_thread = Thread(target=run_health_server, daemon=True)
+    health_thread.start()
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
     
