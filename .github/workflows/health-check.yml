@@ -6,6 +6,11 @@ on:
     - cron: '0 */8 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
 jobs:
   health-check:
     runs-on: ubuntu-latest
@@ -59,7 +64,7 @@ jobs:
         
         # Bot is offline, check how long
         current_time=$(date '+%s')
-        forty_eight_hours=10  
+        forty_eight_hours=172800  
         
         # Get the first offline timestamp
         if [ -f .health/status.log ]; then
