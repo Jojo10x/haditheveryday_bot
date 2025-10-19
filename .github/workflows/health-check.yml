@@ -32,9 +32,13 @@ jobs:
     - name: Save status to file
       run: |
         mkdir -p .health
+        if [ ! -f .health/status.log ]; then
+          touch .health/status.log
+        fi
         echo "$(date '+%s')|${{ steps.check.outputs.status }}" >> .health/status.log
         tail -n 100 .health/status.log > .health/status.tmp
         mv .health/status.tmp .health/status.log
+        cat .health/status.log  # Debug: show the log
 
     - name: Check 48-hour downtime
       id: downtime
@@ -48,7 +52,7 @@ jobs:
         # Bot is offline, check how long
         current_time=$(date '+%s')
         forty_eight_hours=10
-
+        
         offline_since=0
         if [ -f .health/status.log ]; then
           first_offline=$(grep "offline" .health/status.log | head -n 1 | cut -d'|' -f1)
