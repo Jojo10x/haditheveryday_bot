@@ -427,39 +427,6 @@ async def hadith_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-async def test_daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Test daily hadith immediately"""
-    user_id = update.message.from_user.id
-    chat_id = update.message.chat_id
-    
-    jobs = context.job_queue.get_jobs_by_name(f"daily_hadith_{user_id}")
-    
-    if not jobs:
-        await update.message.reply_text(
-            "❌ Daily hadith is not enabled.\n\n"
-            "Use /daily to set it up first."
-        )
-        return
-    
-    await update.message.reply_text("⏳ Sending test daily hadith...")
-    
-    hadith = fetch_random_hadith()
-    message = format_hadith_message(hadith)
-    message = "🧪 *Test Daily Hadith*\n\n" + message
-    
-    keyboard = [
-        [InlineKeyboardButton("🔄 Get Another", callback_data='get_hadith')],
-        [InlineKeyboardButton("⚙️ Settings", callback_data='daily_settings')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=message,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
-
 async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /daily command"""
     user_id = update.message.from_user.id
@@ -542,7 +509,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("hadith", hadith_command))
     app.add_handler(CommandHandler("daily", daily_command))
-    app.add_handler(CommandHandler("testdaily", test_daily_command))
     app.add_handler(CommandHandler("cancel", cancel))
     
     app.add_handler(CallbackQueryHandler(button_callback))
@@ -555,7 +521,7 @@ def main():
     app.add_error_handler(error_handler)
     
     logger.info("Bot is running... Press Ctrl+C to stop.")
-    logger.info("Commands registered: /start, /hadith, /daily, /testdaily, /cancel")
+    logger.info("Commands registered: /start, /hadith, /daily, /cancel")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == '__main__':
