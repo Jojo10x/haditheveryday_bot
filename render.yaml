@@ -1,5 +1,5 @@
 services:
-  - type: web
+  - type: worker
     name: hadith-bot
     env: python
     region: frankfurt
@@ -15,5 +15,5 @@ services:
       - key: HADITH_API_KEY
         sync: false
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: 3.11.9
     autoDeploy: true
