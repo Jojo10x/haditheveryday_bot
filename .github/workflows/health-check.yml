@@ -47,9 +47,8 @@ jobs:
         
         # Bot is offline, check how long
         current_time=$(date '+%s')
-        forty_eight_hours=172800  # 48 hours in seconds
-        
-        # Check if all recent checks (last 48 hours) were offline
+        forty_eight_hours=10
+
         offline_since=0
         if [ -f .health/status.log ]; then
           first_offline=$(grep "offline" .health/status.log | head -n 1 | cut -d'|' -f1)
