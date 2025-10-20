@@ -28,18 +28,36 @@ jobs:
         restore-keys: |
           bot-health-status-
 
-    - name: Check bot status
+    - name: Check bot status with wake-up retry
       id: check
       run: |
-        # Check if the health endpoint on your Render service is responding
-        response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 https://haditheveryday-bot.onrender.com)
+        max_attempts=3
+        attempt=0
+        success=false
         
-        if [ $response -eq 200 ]; then
-          echo "status=online" >> $GITHUB_OUTPUT
-          echo "✅ Bot service is responding on Render"
-        else
+        while [ $attempt -lt $max_attempts ]; do
+          attempt=$((attempt + 1))
+          echo "🔄 Attempt $attempt/$max_attempts: Checking bot health..."
+          
+          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://haditheveryday-bot.onrender.com)
+          
+          if [ $response -eq 200 ]; then
+            echo "status=online" >> $GITHUB_OUTPUT
+            echo "✅ Bot service is responding (attempt $attempt)"
+            success=true
+            break
+          else
+            echo "⚠️ Attempt $attempt failed (HTTP $response)"
+            if [ $attempt -lt $max_attempts ]; then
+              echo "⏳ Waiting 15 seconds for service to wake up..."
+              sleep 15
+            fi
+          fi
+        done
+        
+        if [ "$success" = false ]; then
           echo "status=offline" >> $GITHUB_OUTPUT
-          echo "❌ Bot service is not responding (HTTP $response)"
+          echo "❌ Bot service failed all $max_attempts attempts"
         fi
 
     - name: Save status to file
@@ -57,38 +75,37 @@ jobs:
       run: |
         if [ "${{ steps.check.outputs.status }}" == "online" ]; then
           echo "alert=false" >> $GITHUB_OUTPUT
-          echo "Bot is healthy, clearing log"
+          echo "✅ Bot is healthy, clearing log"
           rm -f .health/status.log
           exit 0
         fi
         
-        # Bot is offline, check how long
         current_time=$(date '+%s')
         forty_eight_hours=172800  
         
-        # Get the first offline timestamp
         if [ -f .health/status.log ]; then
           first_offline=$(grep "offline" .health/status.log | head -n 1 | cut -d'|' -f1)
           
           if [ ! -z "$first_offline" ]; then
             offline_duration=$((current_time - first_offline))
-            echo "🔍 Bot has been offline for $offline_duration seconds"
+            hours=$((offline_duration / 3600))
+            echo "🔍 Bot has been offline for $hours hours ($offline_duration seconds)"
             
             if [ $offline_duration -ge $forty_eight_hours ]; then
               echo "alert=true" >> $GITHUB_OUTPUT
-              echo "🚨 ALERT: Bot down for ${offline_duration}s (threshold: ${forty_eight_hours}s)!"
+              echo "🚨 ALERT: Bot down for ${hours}h (threshold: 48h)!"
             else
               echo "alert=false" >> $GITHUB_OUTPUT
-              seconds_remaining=$((forty_eight_hours - offline_duration))
-              echo "⏳ Bot offline for ${offline_duration}s (need ${seconds_remaining}s more before alert)"
+              hours_remaining=$(((forty_eight_hours - offline_duration) / 3600))
+              echo "⏳ Bot offline for ${hours}h (need ${hours_remaining}h more before alert)"
             fi
           else
             echo "alert=false" >> $GITHUB_OUTPUT
-            echo "First offline detection"
+            echo "📝 First offline detection"
           fi
         else
           echo "alert=false" >> $GITHUB_OUTPUT
-          echo "No status log found"
+          echo "📝 No status log found - first check"
         fi
 
     - name: Save status cache
@@ -109,10 +126,20 @@ jobs:
     - name: Send Telegram Alert
       if: steps.downtime.outputs.alert == 'true'
       run: |
+        # Calculate hours offline
+        if [ -f .health/status.log ]; then
+          first_offline=$(grep "offline" .health/status.log | head -n 1 | cut -d'|' -f1)
+          current_time=$(date '+%s')
+          offline_duration=$((current_time - first_offline))
+          hours=$((offline_duration / 3600))
+        else
+          hours="48+"
+        fi
+        
         curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
           -d chat_id="${{ secrets.ADMIN_CHAT_ID }}" \
           -d parse_mode="Markdown" \
-          -d text="🚨 *CRITICAL ALERT*%0A%0A⚠️ Hadith Bot has been DOWN for 48+ hours!%0A%0A🕐 Time: $(date '+%Y-%m-%d %H:%M:%S UTC')%0A%0A👉 Action Required: Check Render deployment immediately!%0A%0A🔗 https://dashboard.render.com"
+          -d text="🚨 *CRITICAL ALERT*%0A%0A⚠️ Hadith Bot has been DOWN for ${hours}+ hours!%0A%0A🕐 Time: $(date '+%Y-%m-%d %H:%M:%S UTC')%0A%0A👉 Action Required: Check Render deployment immediately!%0A%0ANote: Tried waking the bot 3 times with 15s delays - all failed.%0A%0A🔗 https://dashboard.render.com"
 
     - name: Create GitHub Issue
       if: steps.downtime.outputs.alert == 'true'
@@ -127,11 +154,24 @@ jobs:
           });
           
           if (issues.data.length === 0) {
+            const fs = require('fs');
+            let hoursOffline = '48+';
+            try {
+              const logContent = fs.readFileSync('.health/status.log', 'utf8');
+              const firstOffline = logContent.split('\n')
+                .filter(line => line.includes('offline'))[0]
+                ?.split('|')[0];
+              if (firstOffline) {
+                const offlineDuration = Math.floor(Date.now() / 1000) - parseInt(firstOffline);
+                hoursOffline = Math.floor(offlineDuration / 3600);
+              }
+            } catch (e) {}
+            
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: '🚨 CRITICAL: Bot Down for 48+ Hours',
-              body: `⚠️ **The Hadith Bot has been unresponsive for over 48 hours!**\n\n**Detection Time:** ${new Date().toISOString()}\n\n## Immediate Actions Required:\n\n1. Check Render deployment status\n2. Review application logs\n3. Verify database connectivity\n4. Test Telegram API token\n5. Check Hadith API status\n\n**Status:** Bot not responding to health endpoint\n\n🔗 [Render Dashboard](https://dashboard.render.com)`,
+              title: `🚨 CRITICAL: Bot Down for ${hoursOffline}+ Hours`,
+              body: `⚠️ **The Hadith Bot has been unresponsive for over 48 hours!**\n\n**Detection Time:** ${new Date().toISOString()}\n**Offline Duration:** ${hoursOffline}+ hours\n\n## What Was Tried:\n\n- ✅ Made 3 wake-up attempts with 15-second delays\n- ✅ Waited up to 45 seconds for server to respond\n- ❌ All attempts failed\n\n## Immediate Actions Required:\n\n1. Check Render deployment status and logs\n2. Verify service hasn't crashed or hit resource limits\n3. Review application logs for errors\n4. Verify database connectivity\n5. Test Telegram API token\n6. Check Hadith API status\n7. Manually restart service if needed\n\n**Status:** Bot not responding after multiple wake-up attempts\n\n🔗 [Render Dashboard](https://dashboard.render.com)\n🔗 [Service URL](https://haditheveryday-bot.onrender.com)`,
               labels: ['critical', 'bot-down', 'urgent']
             });
           }

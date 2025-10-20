@@ -25,6 +25,27 @@ from telegram.ext import (
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+import asyncio
+
+async def ensure_bot_awake():
+    """Ensure the bot service is awake before processing commands"""
+    health_url = "https://haditheveryday-bot.onrender.com"
+    max_attempts = 3
+    
+    for attempt in range(max_attempts):
+        try:
+            response = requests.get(health_url, timeout=5)
+            if response.status_code == 200:
+                logger.info(f"Bot is awake (attempt {attempt + 1})")
+                return True
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Wake-up attempt {attempt + 1} failed: {e}")
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(3)  
+    
+    logger.warning("Bot may still be waking up, proceeding anyway...")
+    return False
+
 load_dotenv()
 
 logging.basicConfig(
@@ -150,8 +171,21 @@ def get_daily_settings_keyboard(is_enabled=False):
         ]
     return InlineKeyboardMarkup(keyboard)
 
+async def pre_wake_bot(context: ContextTypes.DEFAULT_TYPE):
+    """Wake up the bot 5 minutes before sending daily hadith"""
+    logger.info("Pre-waking bot for upcoming daily hadith...")
+    health_url = "https://haditheveryday-bot.onrender.com"
+    
+    try:
+        response = requests.get(health_url, timeout=10)
+        if response.status_code == 200:
+            logger.info("Bot pre-wake successful")
+    except Exception as e:
+        logger.warning(f"Pre-wake failed: {e}")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
+    await ensure_bot_awake() 
     user = update.message.from_user
     
     save_user(
@@ -293,11 +327,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif query.data == 'disable_daily':
         user_id = query.from_user.id
-        
         update_daily_hadith_settings(user_id, enabled=False, time_str=None)
         
         jobs = context.job_queue.get_jobs_by_name(f"daily_hadith_{user_id}")
         for job in jobs:
+            job.schedule_removal()
+        
+        pre_wake_jobs = context.job_queue.get_jobs_by_name(f"pre_wake_{user_id}")
+        for job in pre_wake_jobs:
             job.schedule_removal()
         
         await query.edit_message_text(
@@ -362,6 +399,21 @@ async def handle_time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for job in jobs:
             job.schedule_removal()
         
+        pre_wake_jobs = context.job_queue.get_jobs_by_name(f"pre_wake_{user_id}")
+        for job in pre_wake_jobs:
+            job.schedule_removal()
+        
+        pre_wake_minute = (minute - 5) % 60
+        pre_wake_hour = hour if minute >= 5 else (hour - 1) % 24
+        
+        context.job_queue.run_daily(
+            pre_wake_bot,
+            time=time(hour=pre_wake_hour, minute=pre_wake_minute, tzinfo=user_timezone),
+            chat_id=chat_id,
+            name=f"pre_wake_{user_id}",
+            user_id=user_id
+        )
+        
         context.job_queue.run_daily(
             send_daily_hadith,
             time=time(hour=hour, minute=minute, tzinfo=user_timezone),
@@ -380,7 +432,8 @@ async def handle_time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ Daily hadith enabled!\n\n"
             f"You will receive a hadith every day at {time_text}.\n"
-            f"🌍 Timezone: {user_timezone_str}\n\n"
+            f"🌍 Timezone: {user_timezone_str}\n"
+            f"⏰ Bot will auto-wake at {pre_wake_hour:02d}:{pre_wake_minute:02d}\n\n"
             f"Make sure to keep the bot unblocked to receive messages.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -398,6 +451,7 @@ async def handle_time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel current operation"""
+    await ensure_bot_awake()
     context.user_data['awaiting_time'] = False
     
     keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data='main_menu')]]
@@ -410,6 +464,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def hadith_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /hadith command"""
+    await ensure_bot_awake() 
     await update.message.reply_text("⏳ Fetching hadith...")
     
     hadith = fetch_random_hadith()
@@ -429,6 +484,7 @@ async def hadith_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /daily command"""
+    await ensure_bot_awake() 
     user_id = update.message.from_user.id
     jobs = context.job_queue.get_jobs_by_name(f"daily_hadith_{user_id}")
     is_enabled = len(jobs) > 0
@@ -483,6 +539,17 @@ async def post_init(application: Application):
                 
                 user_timezone = pytz.timezone(timezone_str)
                 
+                pre_wake_minute = (minute - 5) % 60
+                pre_wake_hour = hour if minute >= 5 else (hour - 1) % 24
+                
+                application.job_queue.run_daily(
+                    pre_wake_bot,
+                    time=time(hour=pre_wake_hour, minute=pre_wake_minute, tzinfo=user_timezone),
+                    chat_id=chat_id,
+                    name=f"pre_wake_{user_id}",
+                    user_id=user_id
+                )
+                
                 application.job_queue.run_daily(
                     send_daily_hadith,
                     time=time(hour=hour, minute=minute, tzinfo=user_timezone),
@@ -491,11 +558,11 @@ async def post_init(application: Application):
                     user_id=user_id
                 )
                 
-                logger.info(f"Restored daily hadith job for user {user_id} at {hour:02d}:{minute:02d} ({timezone_str})")
+                logger.info(f"Restored jobs for user {user_id}: pre-wake at {pre_wake_hour:02d}:{pre_wake_minute:02d}, hadith at {hour:02d}:{minute:02d} ({timezone_str})")
             except Exception as e:
                 logger.error(f"Error restoring job for user {user_id}: {e}")
     
-    logger.info(f"Restored {len(users)} scheduled jobs")
+    logger.info(f"Restored jobs for {len(users)} users")
 
 def main():
     """Start the bot"""
