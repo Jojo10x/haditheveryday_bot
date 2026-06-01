@@ -55,9 +55,14 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
         self.wfile.write(b'Bot is running')
-    
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+
     def log_message(self, format, *args):
-        pass  
+        pass
 
 def run_health_server():
     server = HTTPServer(('0.0.0.0', PORT), HealthCheckHandler)
