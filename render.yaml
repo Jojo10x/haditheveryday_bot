@@ -1,10 +1,13 @@
 services:
-  - type: worker
+  - type: web
     name: hadith-bot
-    env: docker
+    runtime: docker
     region: frankfurt
     plan: free
     branch: main
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
         sync: false
@@ -12,4 +15,3 @@ services:
         sync: false
       - key: HADITH_API_KEY
         sync: false
-    autoDeploy: true
